@@ -26,7 +26,7 @@ if lsmod | grep virtio_balloon > /dev/null; then
         echo -e "\033[34m气球当前内存分配: $balloon_current_mem\033[0m"
         echo -e "\033[34m气球目标内存分配: $balloon_target_mem\033[0m"
     else
-        echo -e "\033[31m无法检测出气球当前内存分配和气球目标内存分配\033[0m"
+        echo -e "\033[31m无法检测出气球当前内存分配和气球目标内存分配，请尝试更换Ubuntu系统并且不要使用精简版\033[0m"
     fi
 else
     echo -e "\033[32m不存在 virtio_balloon 模块\033[0m"
