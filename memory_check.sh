@@ -20,10 +20,14 @@ echo -e "\033[36m检查是否使用了 气球驱动 Balloon 超售内存\033[0m"
 if lsmod | grep virtio_balloon > /dev/null; then
     echo -e "\033[31m存在 virtio_balloon 模块\033[0m"
     echo -e "\033[31m可能使用了 气球驱动 Balloon 超售内存\033[0m"
-    balloon_current_mem=$(cat /sys/class/balloon/balloon0/current_memory)
-    balloon_target_mem=$(cat /sys/class/balloon/balloon0/target_memory)
-    echo -e "\033[34m气球当前内存分配: $balloon_current_mem\033[0m"
-    echo -e "\033[34m气球目标内存分配: $balloon_target_mem\033[0m"
+    if [ -f /sys/class/balloon/balloon0/current_memory ] && [ -f /sys/class/balloon/balloon0/target_memory ]; then
+        balloon_current_mem=$(cat /sys/class/balloon/balloon0/current_memory)
+        balloon_target_mem=$(cat /sys/class/balloon/balloon0/target_memory)
+        echo -e "\033[34m气球当前内存分配: $balloon_current_mem\033[0m"
+        echo -e "\033[34m气球目标内存分配: $balloon_target_mem\033[0m"
+    else
+        echo -e "\033[31m无法检测出气球当前内存分配和气球目标内存分配\033[0m"
+    fi
 else
     echo -e "\033[32m不存在 virtio_balloon 模块\033[0m"
     echo -e "\033[32m未使用 气球驱动 Balloon 超售内存\033[0m"
@@ -32,8 +36,8 @@ echo -e "\033[0m====================\033[0m"
 
 # 检查是否使用了 Kernel Samepage Merging (KSM) 超售内存
 echo -e "\033[36m检查是否使用了 Kernel Samepage Merging (KSM) 超售内存\033[0m"
-if [ $(cat /sys/kernel/mm/ksm/run) -eq 1 ]; then
-    echo -e "\033[31mKernel Samepage Merging 已启用\033[0m"
+if [ -f /sys/kernel/mm/ksm/run ] && [ $(cat /sys/kernel/mm/ksm/run) -eq 1 ]; then
+    echo -e "\033[31mKernel Samepage Merging 已启用\033{0m"
     echo -e "\033[31m可能使用了 Kernel Samepage Merging (KSM) 超售内存\033[0m"
     merged_pages=$(cat /sys/kernel/mm/ksm/pages_sharing)
     echo -e "\033[34m已合并页面数: $merged_pages\033[0m"
