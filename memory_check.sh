@@ -56,22 +56,22 @@ parse_args() {
 }
 
 show_help() {
-    echo "VPS Diagnostics Toolkit (v${VERSION})"
-    echo "Usage: $0 [options]"
+    echo "VPS 诊断工具 (v${VERSION})"
+    echo "用法: $0 [选项]"
     echo
-    echo "Options:"
-    echo "  --disk-warn-mbps <val>   Set disk I/O warning threshold in MB/s (default: ${DISK_WARN_MBPS})."
-    echo "  --mem-warn-mbps <val>    Set memory speed warning threshold in MB/s (default: ${MEM_WARN_MBPS})."
-    echo "  --steal-warn-percent <val> Set CPU steal time warning threshold in percent (default: ${STEAL_WARN_PERCENT})."
-    echo "  --skip-io                Skip the disk and memory I/O performance tests."
-    echo "  --json                   Output results in JSON format."
-    echo "  -h, --help               Show this help message."
+    echo "选项:"
+    echo "  --disk-warn-mbps <值>   设置磁盘I/O警告阈值 (MB/s) (默认: ${DISK_WARN_MBPS})."
+    echo "  --mem-warn-mbps <值>    设置内存速度警告阈值 (MB/s) (默认: ${MEM_WARN_MBPS})."
+    echo "  --steal-warn-percent <值> 设置CPU窃取时间警告阈值 (%) (默认: ${STEAL_WARN_PERCENT})."
+    echo "  --skip-io                跳过磁盘和内存I/O性能测试."
+    echo "  --json                   以JSON格式输出结果."
+    echo "  -h, --help               显示此帮助信息."
 }
 
 # --- Core Check Functions ---
 
 install_dependencies() {
-    print_color "36" "[0/6] Dependency Auto-Installer"
+    print_color "36" "[0/6] 依赖自动安装程序"
     local pkgs_to_install=()
     local pkg_map_fio="fio"
     local pkg_map_sysstat="sysstat"
@@ -84,19 +84,19 @@ install_dependencies() {
     fi
 
     if [ ${#pkgs_to_install[@]} -eq 0 ]; then
-        print_color "32" "All recommended diagnostic tools are already installed."
+        print_color "32" "所有推荐的诊断工具均已安装."
         RESULTS[dependencies]="OK"
         return
     fi
 
-    print_color "33" "Attempting to auto-install missing tools: ${pkgs_to_install[*]}"
+    print_color "33" "正在尝试自动安装缺失的工具: ${pkgs_to_install[*]}"
     local pm=""
     if command -v apt-get &>/dev/null; then pm="apt"; fi
     if command -v yum &>/dev/null; then pm="yum"; fi
     if command -v dnf &>/dev/null; then pm="dnf"; fi
 
     if [ -z "$pm" ]; then
-        print_color "31" "Error: Could not detect package manager (apt/yum/dnf). Please install dependencies manually."
+        print_color "31" "错误: 无法检测到包管理器 (apt/yum/dnf)。请手动安装依赖项。"
         exit 1
     fi
     
@@ -106,7 +106,7 @@ install_dependencies() {
     elif command -v sudo &>/dev/null; then
         install_cmd="sudo"
     else
-        print_color "31" "Error: This script requires root privileges or 'sudo' to install dependencies. Aborting."
+        print_color "31" "错误: 此脚本需要 root 权限或 'sudo' 来安装依赖项。正在中止。"
         exit 1
     fi
 
@@ -120,37 +120,37 @@ install_dependencies() {
             ;;
     esac
     
-    print_color "32" "Dependency installation process complete."
+    print_color "32" "依赖安装过程完成。"
     RESULTS[dependencies]="installed_attempted"
 }
 
 check_virt_type() {
-    print_color "36" "[1/6] Virtualization Technology Detection"
+    print_color "36" "[1/6] 虚拟化技术检测"
     if command -v systemd-detect-virt &>/dev/null; then
         VIRT_TYPE=$(systemd-detect-virt)
     elif command -v virt-what &>/dev/null; then
         VIRT_TYPE=$(virt-what)
     fi
-    print_color "34" "Detected Virtualization: ${VIRT_TYPE}"
+    print_color "34" "检测到的虚拟化技术: ${VIRT_TYPE}"
     RESULTS[virt_type]=$VIRT_TYPE
 }
 
 run_memory_test() {
-    if [[ "$SKIP_IO" == true ]]; then print_color "33" "[2/6] Memory Performance Test (Skipped)"; return; fi
-    print_color "36" "[2/6] Memory Performance Test"
+    if [[ "$SKIP_IO" == true ]]; then print_color "33" "[2/6] 内存性能测试 (已跳过)"; return; fi
+    print_color "36" "[2/6] 内存性能测试"
     
     local test_path=""
     if [ -d /dev/shm ] && [ -w /dev/shm ]; then
         test_path="/dev/shm"
-        print_color "32" "Method: 'dd' on /dev/shm (in-memory filesystem)."
+        print_color "32" "方法: 使用 'dd' 测试 /dev/shm (内存文件系统)."
     else
         test_path="/tmp"
-        print_color "33" "Notice: /dev/shm unavailable, using /tmp. Results may be affected by disk speed."
+        print_color "33" "注意: /dev/shm 不可用, 回退到 /tmp 进行测试。结果可能受磁盘影响。"
     fi
 
     local speed_info
     if ! speed_info=$(LC_ALL=C dd if=/dev/zero of="${test_path}/test.tmp" bs=1M count=256 2>&1); then
-        print_color "31" "Test failed: 'dd' command execution error."
+        print_color "31" "测试失败: 'dd' 命令执行错误。"
         RESULTS[memory_mbps]=-1
         return
     fi
@@ -168,84 +168,84 @@ run_memory_test() {
     fi
 
     RESULTS[memory_mbps]=$speed_mb
-    print_color "34" "Result: ${speed_mb} MB/s"
+    print_color "34" "结果: ${speed_mb} MB/s"
     if [ "$speed_mb" -lt "$MEM_WARN_MBPS" ] && [ "$test_path" == "/dev/shm" ]; then
-        print_color "31" "Warning: Memory speed is below threshold (${MEM_WARN_MBPS} MB/s)."
+        print_color "31" "警告: 内存速度低于阈值 (${MEM_WARN_MBPS} MB/s)."
     fi
 }
 
 run_disk_test() {
-    if [[ "$SKIP_IO" == true ]]; then print_color "33" "[3/6] Disk I/O Performance Test (Skipped)"; return; fi
-    print_color "36" "[3/6] Disk I/O Performance Test"
+    if [[ "$SKIP_IO" == true ]]; then print_color "33" "[3/6] 磁盘I/O性能测试 (已跳过)"; return; fi
+    print_color "36" "[3/6] 磁盘I/O性能测试"
     
     if ! command -v fio &>/dev/null; then
-        print_color "31" "Test Failed: 'fio' is required but not installed. Auto-install may have failed."
+        print_color "31" "测试失败: 'fio' 是必需的但未安装。自动安装可能已失败。"
         RESULTS[disk_mbps]=-1
         return
     fi
     
-    print_color "32" "Method: 'fio' benchmark (4k random write, direct I/O)."
+    print_color "32" "方法: 'fio' 基准测试 (4k 随机写入, 直接 I/O)."
     local fio_output speed_mb
     if ! fio_output=$(fio --name=test --ioengine=libaio --iodepth=64 --rw=randwrite --bs=4k --direct=1 --size=256M --numjobs=1 --runtime=10 --filename=fio_test_file.tmp --group_reporting 2>&1); then
-         print_color "31" "Test failed: 'fio' command execution error."
+         print_color "31" "测试失败: 'fio' 命令执行错误。"
          RESULTS[disk_mbps]=-1
          return
     fi
     speed_mb=$(echo "$fio_output" | grep -oP 'bw=\K[0-9.]+(?=MiB/s)' | awk '{printf "%.0f", $1}')
 
     RESULTS[disk_mbps]=$speed_mb
-    print_color "34" "Result: ${speed_mb} MB/s"
+    print_color "34" "结果: ${speed_mb} MB/s"
     if [ "$speed_mb" -lt "$DISK_WARN_MBPS" ]; then
-        print_color "31" "Warning: Disk I/O speed is below threshold (${DISK_WARN_MBPS} MB/s)."
+        print_color "31" "警告: 磁盘I/O速度低于阈值 (${DISK_WARN_MBPS} MB/s)."
     fi
 }
 
 check_kvm_features() {
     if [[ "$VIRT_TYPE" != "kvm" && "$VIRT_TYPE" != "qemu" ]]; then
-      print_color "33" "[4/6] KVM-Specific Feature Check (Skipped, Not KVM)"
+      print_color "33" "[4/6] KVM特定功能检查 (已跳过, 非KVM)"
       RESULTS[balloon_driver]="not_applicable"
       RESULTS[ksm_enabled]="not_applicable"
       return
     fi
     
-    print_color "36" "[4/6] KVM Feature: virtio_balloon Driver"
+    print_color "36" "[4/6] KVM 功能: virtio_balloon 驱动"
     if lsmod | grep -q virtio_balloon; then
-        print_color "33" "Indicator: virtio_balloon driver is loaded."
-        print_color "33" "This enables the host to dynamically reclaim memory, a capability for overselling."
+        print_color "33" "指标: virtio_balloon 驱动已加载。"
+        print_color "33" "这使得主机能够动态回收内存，是超售的一种能力。"
         RESULTS[balloon_driver]="loaded"
     else
-        print_color "32" "OK: virtio_balloon driver is not loaded."
+        print_color "32" "正常: virtio_balloon 驱动未加载。"
         RESULTS[balloon_driver]="not_loaded"
     fi
 
-    print_color "36" "[5/6] KVM Feature: Kernel Samepage Merging (KSM)"
+    print_color "36" "[5/6] KVM 功能: 内核同页合并 (KSM)"
     if [ -f /sys/kernel/mm/ksm/run ] && [ "$(cat /sys/kernel/mm/ksm/run)" -eq 1 ]; then
-        print_color "33" "Indicator: KSM is enabled."
-        print_color "33" "This memory-saving feature is commonly used in high-density virtualization."
+        print_color "33" "指标: KSM 已启用。"
+        print_color "33" "此内存节省功能常用于高密度虚拟化环境。"
         RESULTS[ksm_enabled]=true
     else
-        print_color "32" "OK: KSM is not enabled."
+        print_color "32" "正常: KSM 未启用。"
         RESULTS[ksm_enabled]=false
     fi
 }
 
 run_cpu_steal_test() {
-    print_color "36" "[6/6] CPU Steal Time Analysis"
+    print_color "36" "[6/6] CPU 窃取时间分析"
     
     if ! command -v mpstat &>/dev/null; then
-        print_color "31" "Test Failed: 'mpstat' is required but not installed. Auto-install may have failed."
+        print_color "31" "测试失败: 'mpstat' 是必需的但未安装。自动安装可能已失败。"
         RESULTS[cpu_steal_percent]=-1
         return
     fi
 
-    print_color "32" "Method: 'mpstat' analysis over 5 seconds (average)."
+    print_color "32" "方法: 'mpstat' 分析 (5秒平均值)。"
     local steal_avg
     steal_avg=$(mpstat -P ALL 1 5 | grep "Average" | awk '{print $NF}')
     
     RESULTS[cpu_steal_percent]=$steal_avg
-    print_color "34" "Result: ${steal_avg}% average steal time."
+    print_color "34" "结果: ${steal_avg}% 平均窃取时间。"
     if (( $(echo "$steal_avg > $STEAL_WARN_PERCENT" | bc -l 2>/dev/null || echo "$steal_avg > $STEAL_WARN_PERCENT") )); then
-        print_color "31" "Warning: CPU Steal Time is above threshold (${STEAL_WARN_PERCENT}%)."
+        print_color "31" "警告: CPU 窃取时间高于阈值 (${STEAL_WARN_PERCENT}%)。"
     fi
 }
 
@@ -255,7 +255,7 @@ main() {
     parse_args "$@"
     
     if [[ "$JSON_OUTPUT" == false ]]; then
-        print_color "33" "VPS Diagnostics Toolkit (v${VERSION})"
+        print_color "33" "VPS 诊断工具 (v${VERSION})"
         print_color "0"  "================================================"
     fi
 
@@ -281,9 +281,9 @@ main() {
         echo "${json_str%,}}" # Remove trailing comma and close bracket
     else
         print_color "0"  "------------------------------------------------"
-        print_color "33" "Diagnostic Complete."
-        print_color "35" "Disclaimer: These results are diagnostic indicators, not definitive proof of"
-        print_color "35" "overselling. Correlate with your application's performance for a complete picture."
+        print_color "33" "诊断完成。"
+        print_color "35" "免责声明: 此结果为诊断指标, 并非超售的最终定论。"
+        print_color "35" "请结合您的应用实际性能进行综合判断。"
     fi
 }
 
