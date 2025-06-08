@@ -1,20 +1,16 @@
 #!/usr/bin/env bash
 
 #
-# VPS Diagnostics Toolkit (v11)
+# VPS Diagnostics Toolkit (v12)
 #
 # Description:
 # An advanced, self-provisioning diagnostic script to evaluate VPS performance. It features
 # an optional full-test mode for in-depth analysis using professional tools.
 #
-# Changelog (v11):
-# 1. New Mode: Added '--full-test' for comprehensive memory and disk benchmarking.
-# 2. Advanced Memory Test: In full-test mode, uses 'sysbench' for more accurate memory
-#    throughput analysis, avoiding page cache limitations of 'dd'.
-# 3. Comprehensive I/O Test: In full-test mode, 'fio' now runs a suite of tests:
-#    random read/write and sequential read/write, providing a complete I/O profile.
-# 4. Dependency Management: Added 'sysbench' to the auto-installer.
-# 5. Code Structure: Refactored tests into basic and full modes for clarity.
+# Changelog (v12):
+# 1. Critical Fix (Scope): Moved the 'RESULTS' associative array declaration to the
+#    global scope. This fixes a critical bug where results from check functions were
+#    not saved, leading to empty JSON output and incorrect reports.
 #
 
 # --- Safe Execution & Cleanup ---
@@ -22,7 +18,7 @@ set -euo pipefail
 trap 'rm -f test_io.tmp fio_test_file*.tmp' EXIT
 
 # --- Global Variables & Default Settings ---
-VERSION="11.0"
+VERSION="12.0"
 DISK_WARN_MBPS=0 # Will be set dynamically
 MEM_WARN_MBPS=500
 STEAL_WARN_PERCENT=5
@@ -30,6 +26,7 @@ JSON_OUTPUT=false
 SKIP_IO=false
 FULL_TEST=false
 VIRT_TYPE="unknown"
+declare -A RESULTS
 
 # --- Helper function for colored output ---
 print_color() {
@@ -321,7 +318,6 @@ run_cpu_steal_test() {
 
 # --- Main Execution Logic ---
 main() {
-    declare -A RESULTS
     parse_args "$@"
     
     if [[ "$JSON_OUTPUT" == false ]]; then
