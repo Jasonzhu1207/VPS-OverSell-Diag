@@ -1,29 +1,31 @@
 #!/usr/bin/env bash
 
 #
-# VPS Diagnostics Toolkit (v9)
+# VPS Diagnostics Toolkit (v10)
 #
 # Description:
-# A self-provisioning diagnostic script to evaluate VPS performance. It automatically
-# attempts to install professional tools (fio, sysstat) to ensure accurate analysis,
-# adapts to the virtualization technology, and offers robust, structured output.
+# An advanced, self-provisioning diagnostic script to evaluate VPS performance. It features
+# dynamic I/O thresholds, robust sampling methods, and professional-grade code practices.
 #
-# Changelog (v9):
-# 1. Critical Fix (CPU Steal): Corrected the parsing logic for 'mpstat' to accurately
-#    extract the '%steal' value, fixing the syntax error on some systems.
-# 2. Robustness (CPU Compare): Re-implemented the CPU steal comparison to correctly
-#    handle systems with and without the 'bc' utility.
-# 3. Aesthetics: Re-introduced separators between sections for improved readability.
-#    Renumbered check steps for clarity.
+# Changelog (v10):
+# 1. Dynamic I/O Threshold: Automatically detects disk type (HDD/SSD/NVMe) and sets a
+#    smarter default warning threshold.
+# 2. More Robust CPU Sampling: Increased mpstat sampling to 10 seconds and enforced
+#    LANG=C for more reliable steal time analysis.
+# 3. Safer Execution: Added 'set -u' for stricter variable handling, alongside existing
+#    'set -eo pipefail'.
+# 4. Robust JSON Output: Re-implemented JSON generation with 'printf' for reliability
+#    and proper escaping.
+# 5. Code Refinements: General code cleanup and improved function clarity.
 #
 
 # --- Safe Execution & Cleanup ---
-set -eo pipefail
+set -euo pipefail
 trap 'rm -f test_io.tmp fio_test_file.tmp' EXIT
 
 # --- Global Variables & Default Settings ---
-VERSION="9.0"
-DISK_WARN_MBPS=100
+VERSION="10.0"
+DISK_WARN_MBPS=0 # Will be set dynamically
 MEM_WARN_MBPS=500
 STEAL_WARN_PERCENT=5
 JSON_OUTPUT=false
@@ -59,7 +61,7 @@ show_help() {
     echo "用法: $0 [选项]"
     echo
     echo "选项:"
-    echo "  --disk-warn-mbps <值>   设置磁盘I/O警告阈值 (MB/s) (默认: ${DISK_WARN_MBPS})."
+    echo "  --disk-warn-mbps <值>   设置磁盘I/O警告阈值 (MB/s) (默认: 动态检测)."
     echo "  --mem-warn-mbps <值>    设置内存速度警告阈值 (MB/s) (默认: ${MEM_WARN_MBPS})."
     echo "  --steal-warn-percent <值> 设置CPU窃取时间警告阈值 (%) (默认: ${STEAL_WARN_PERCENT})."
     echo "  --skip-io                跳过磁盘和内存I/O性能测试."
@@ -72,23 +74,33 @@ show_help() {
 install_dependencies() {
     print_color "36" "[0/5] 依赖自动安装程序"
     local pkgs_to_install=()
-    local pkg_map_fio="fio"
-    local pkg_map_sysstat="sysstat"
-    local pkg_map_virtwhat="virt-what"
-
-    if ! command -v fio &>/dev/null; then pkgs_to_install+=($pkg_map_fio); fi
-    if ! command -v mpstat &>/dev/null; then pkgs_to_install+=($pkg_map_sysstat); fi
+    local tools_to_check=("fio" "mpstat" "bc")
+    
     if ! command -v virt-what &>/dev/null && ! command -v systemd-detect-virt &>/dev/null; then
-        pkgs_to_install+=($pkg_map_virtwhat)
+        tools_to_check+=("virt-what")
     fi
+
+    for tool in "${tools_to_check[@]}"; do
+        if ! command -v "$tool" &>/dev/null; then
+            case "$tool" in
+                fio) pkgs_to_install+=("fio") ;;
+                mpstat) pkgs_to_install+=("sysstat") ;;
+                bc) pkgs_to_install+=("bc") ;;
+                "virt-what") pkgs_to_install+=("virt-what") ;;
+            esac
+        fi
+    done
+    
+    # Remove duplicates
+    pkgs_to_install=($(echo "${pkgs_to_install[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
 
     if [ ${#pkgs_to_install[@]} -eq 0 ]; then
         print_color "32" "所有推荐的诊断工具均已安装."
-        RESULTS[dependencies]="OK"
+        RESULTS[dependencies_status]="OK"
         return
     fi
 
-    print_color "33" "正在尝试自动安装缺失的工具: ${pkgs_to_install[*]}"
+    print_color "33" "正在尝试自动安装缺失的工具包: ${pkgs_to_install[*]}"
     local pm=""
     if command -v apt-get &>/dev/null; then pm="apt"; fi
     if command -v yum &>/dev/null; then pm="yum"; fi
@@ -111,7 +123,7 @@ install_dependencies() {
 
     case "$pm" in
         "apt")
-            $install_cmd apt-get update
+            $install_cmd apt-get update -y
             $install_cmd apt-get install -y "${pkgs_to_install[@]}"
             ;;
         "yum"|"dnf")
@@ -120,7 +132,7 @@ install_dependencies() {
     esac
     
     print_color "32" "依赖安装过程完成。"
-    RESULTS[dependencies]="installed_attempted"
+    RESULTS[dependencies_status]="installed_attempted"
 }
 
 check_virt_type() {
@@ -183,6 +195,24 @@ run_disk_test() {
         return
     fi
     
+    # Dynamic Threshold based on disk type
+    if [ "$DISK_WARN_MBPS" -eq 0 ]; then
+        local rota=1 # Default to rotational (HDD)
+        if command -v lsblk &>/dev/null; then
+            # Get rotation status of the disk where current directory resides
+            local current_disk
+            current_disk=$(df . | tail -1 | awk '{print $1}' | sed 's/[0-9]*$//' | sed 's/p[0-9]*$//')
+            rota=$(lsblk -d -n -o ROTA "$current_disk" 2>/dev/null || echo 1)
+        fi
+        if [ "$rota" -eq 0 ]; then # 0 means non-rotational (SSD/NVMe)
+            DISK_WARN_MBPS=200
+            print_color "32" "检测到非机械硬盘(SSD/NVMe), 使用 ${DISK_WARN_MBPS} MB/s 作为警告阈值。"
+        else
+            DISK_WARN_MBPS=80
+            print_color "32" "检测到机械硬盘(HDD), 使用 ${DISK_WARN_MBPS} MB/s 作为警告阈值。"
+        fi
+    fi
+    
     print_color "32" "方法: 'fio' 基准测试 (4k 随机写入, 直接 I/O)."
     local fio_output speed_mb
     if ! fio_output=$(fio --name=test --ioengine=libaio --iodepth=64 --rw=randwrite --bs=4k --direct=1 --size=256M --numjobs=1 --runtime=10 --filename=fio_test_file.tmp --group_reporting 2>&1); then
@@ -193,6 +223,7 @@ run_disk_test() {
     speed_mb=$(echo "$fio_output" | grep -oP 'bw=\K[0-9.]+(?=MiB/s)' | awk '{printf "%.0f", $1}')
 
     RESULTS[disk_mbps]=$speed_mb
+    RESULTS[disk_warn_threshold]=$DISK_WARN_MBPS
     print_color "34" "结果: ${speed_mb} MB/s"
     if [ "$speed_mb" -lt "$DISK_WARN_MBPS" ]; then
         print_color "31" "警告: 磁盘I/O速度低于阈值 (${DISK_WARN_MBPS} MB/s)."
@@ -208,7 +239,6 @@ check_kvm_features() {
       return
     fi
     
-    # KVM Balloon Driver Check
     if lsmod | grep -q virtio_balloon; then
         print_color "33" "指标 (virtio_balloon): 驱动已加载。这使得主机能够动态回收内存，是超售的一种能力。"
         RESULTS[balloon_driver]="loaded"
@@ -217,7 +247,6 @@ check_kvm_features() {
         RESULTS[balloon_driver]="not_loaded"
     fi
 
-    # KSM Check
     if [ -f /sys/kernel/mm/ksm/run ] && [ "$(cat /sys/kernel/mm/ksm/run)" -eq 1 ]; then
         print_color "33" "指标 (KSM): 已启用。此内存节省功能常用于高密度虚拟化环境。"
         RESULTS[ksm_enabled]=true
@@ -236,23 +265,20 @@ run_cpu_steal_test() {
         return
     fi
 
-    print_color "32" "方法: 'mpstat' 分析 (5秒平均值)。"
+    print_color "32" "方法: 'mpstat' 分析 (10秒平均值)。"
     local steal_avg
-    # Robustly parse the %steal column (4th from last) from the final average line
-    steal_avg=$(mpstat -P ALL 1 5 | grep "^Average:" | tail -n 1 | awk '{print $(NF-3)}')
+    steal_avg=$(LANG=C mpstat -P ALL 1 10 | grep "^Average:" | tail -n 1 | awk '{print $(NF-3)}')
     
     RESULTS[cpu_steal_percent]=$steal_avg
     print_color "34" "结果: ${steal_avg}% 平均窃取时间。"
     
-    # Robust comparison for float values, works with/without bc
     if command -v bc &>/dev/null; then
         if (( $(echo "$steal_avg > $STEAL_WARN_PERCENT" | bc -l) )); then
             print_color "31" "警告: CPU 窃取时间高于阈值 (${STEAL_WARN_PERCENT}%)。"
         fi
     else
-        # Fallback to integer comparison if bc is not available
         local steal_avg_int=${steal_avg%.*}
-        if [ "$steal_avg_int" -gt "$STEAL_WARN_PERCENT" ]; then
+        if [ "$steal_avg_int" -ge "$STEAL_WARN_PERCENT" ]; then
             print_color "31" "警告: CPU 窃取时间高于阈值 (${STEAL_WARN_PERCENT}%)。"
         fi
     fi
@@ -281,18 +307,20 @@ main() {
     run_cpu_steal_test
 
     if [[ "$JSON_OUTPUT" == true ]]; then
-        # Convert associative array to JSON
-        json_str="{"
+        # Robust JSON generation using printf
+        printf "{\n"
         for key in "${!RESULTS[@]}"; do
             val="${RESULTS[$key]}"
+            # Escape quotes and backslashes for JSON
+            val_escaped=$(echo "$val" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
             # Check if value is numeric or boolean, otherwise quote it
             if [[ "$val" =~ ^[0-9.-]+$ ]] || [[ "$val" == "true" ]] || [[ "$val" == "false" ]]; then
-                json_str+="\"${key}\":${val},"
+                 printf '  "%s": %s,\n' "$key" "$val_escaped"
             else
-                json_str+="\"${key}\":\"${val}\","
+                 printf '  "%s": "%s",\n' "$key" "$val_escaped"
             fi
-        done
-        echo "${json_str%,}}" # Remove trailing comma and close bracket
+        done | sed '$ s/,$//' # Remove trailing comma from last line
+        printf "}\n"
     else
         print_color "0"  "------------------------------------------------"
         print_color "33" "诊断完成。"
