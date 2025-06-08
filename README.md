@@ -15,7 +15,7 @@
 
 **默认执行深度测试:**
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/jasonzhu1207/memoryCheck/main/main.sh)
+bash <(curl -s https://raw.githubusercontent.com/jasonzhu1207/VPS-OverSell-Diag/main/main.sh)
 ```
 
 ### 🛠️ 自定义参数
