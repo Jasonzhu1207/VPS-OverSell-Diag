@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
 #
-# VPS Diagnostics Toolkit - Runner Script (v2)
+# VPS Diagnostics Toolkit - Runner Script (v3)
 #
 # Description:
-# This script securely downloads the latest version of the main diagnostic script,
-# makes it executable, and runs it, passing along all command-line arguments.
-# It ensures stability with error checking and robust cleanup.
+# This script securely downloads the latest version of the main diagnostic script.
+# It now defaults to running the comprehensive '--full-test' if no arguments are given.
+# Otherwise, it passes all provided arguments to the main script.
 #
 
 # --- Safe Execution & Cleanup ---
@@ -54,12 +54,16 @@ fi
 # 4. Make the script executable
 chmod +x "$temp_script"
 
-# 5. Execute the script, passing all arguments transparently
-print_color "36" "-> 准备执行诊断工具"
+# 5. Execute the script, defaulting to --full-test if no arguments are given
+print_color "36" "-> 准备执行诊断工具..."
 print_color "0"  "================================================"
 
-bash "$temp_script" "$@"
+if [ $# -eq 0 ]; then
+    print_color "33" "-> 未指定参数，默认执行 --full-test 深度测试..."
+    bash "$temp_script" --full-test
+else
+    print_color "33" "-> 检测到自定义参数，将直接传递..."
+    bash "$temp_script" "$@"
+fi
 
 # The 'trap' command will automatically clean up the temp_script on exit.
-# The explicit rm call is therefore not needed but left here for clarity in older scripts.
-# rm "$temp_script"
