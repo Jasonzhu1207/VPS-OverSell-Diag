@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
 
 #
-# VPS Diagnostics Toolkit (v8)
+# VPS Diagnostics Toolkit (v9)
 #
 # Description:
 # A self-provisioning diagnostic script to evaluate VPS performance. It automatically
 # attempts to install professional tools (fio, sysstat) to ensure accurate analysis,
 # adapts to the virtualization technology, and offers robust, structured output.
 #
-# Changelog (v8):
-# 1. Auto-Provisioning: The script now automatically detects and attempts to install
-#    missing dependencies (fio, sysstat, virt-what) using the system's package manager.
-# 2. No Fallbacks: Removed basic methods. 'fio' is now required for disk tests and
-#    'mpstat' for CPU analysis to ensure measurement quality. Tests will fail if
-#    tools cannot be installed.
-# 3. Enhanced Robustness: Improved installation logic with permission checks.
-# 4. Professional Tone: Maintained formal, objective, and professional tone.
+# Changelog (v9):
+# 1. Critical Fix (CPU Steal): Corrected the parsing logic for 'mpstat' to accurately
+#    extract the '%steal' value, fixing the syntax error on some systems.
+# 2. Robustness (CPU Compare): Re-implemented the CPU steal comparison to correctly
+#    handle systems with and without the 'bc' utility.
+# 3. Aesthetics: Re-introduced separators between sections for improved readability.
+#    Renumbered check steps for clarity.
 #
 
 # --- Safe Execution & Cleanup ---
@@ -23,7 +22,7 @@ set -eo pipefail
 trap 'rm -f test_io.tmp fio_test_file.tmp' EXIT
 
 # --- Global Variables & Default Settings ---
-VERSION="8.0"
+VERSION="9.0"
 DISK_WARN_MBPS=100
 MEM_WARN_MBPS=500
 STEAL_WARN_PERCENT=5
@@ -71,7 +70,7 @@ show_help() {
 # --- Core Check Functions ---
 
 install_dependencies() {
-    print_color "36" "[0/6] 依赖自动安装程序"
+    print_color "36" "[0/5] 依赖自动安装程序"
     local pkgs_to_install=()
     local pkg_map_fio="fio"
     local pkg_map_sysstat="sysstat"
@@ -125,7 +124,7 @@ install_dependencies() {
 }
 
 check_virt_type() {
-    print_color "36" "[1/6] 虚拟化技术检测"
+    print_color "36" "[1/5] 虚拟化技术检测"
     if command -v systemd-detect-virt &>/dev/null; then
         VIRT_TYPE=$(systemd-detect-virt)
     elif command -v virt-what &>/dev/null; then
@@ -136,8 +135,8 @@ check_virt_type() {
 }
 
 run_memory_test() {
-    if [[ "$SKIP_IO" == true ]]; then print_color "33" "[2/6] 内存性能测试 (已跳过)"; return; fi
-    print_color "36" "[2/6] 内存性能测试"
+    if [[ "$SKIP_IO" == true ]]; then print_color "33" "[2/5] 内存性能测试 (已跳过)"; return; fi
+    print_color "36" "[2/5] 内存性能测试"
     
     local test_path=""
     if [ -d /dev/shm ] && [ -w /dev/shm ]; then
@@ -175,8 +174,8 @@ run_memory_test() {
 }
 
 run_disk_test() {
-    if [[ "$SKIP_IO" == true ]]; then print_color "33" "[3/6] 磁盘I/O性能测试 (已跳过)"; return; fi
-    print_color "36" "[3/6] 磁盘I/O性能测试"
+    if [[ "$SKIP_IO" == true ]]; then print_color "33" "[3/5] 磁盘I/O性能测试 (已跳过)"; return; fi
+    print_color "36" "[3/5] 磁盘I/O性能测试"
     
     if ! command -v fio &>/dev/null; then
         print_color "31" "测试失败: 'fio' 是必需的但未安装。自动安装可能已失败。"
@@ -201,36 +200,35 @@ run_disk_test() {
 }
 
 check_kvm_features() {
+    print_color "36" "[4/5] KVM 特定功能检查"
     if [[ "$VIRT_TYPE" != "kvm" && "$VIRT_TYPE" != "qemu" ]]; then
-      print_color "33" "[4/6] KVM特定功能检查 (已跳过, 非KVM)"
+      print_color "33" "状态: 已跳过 (非KVM/QEMU环境)"
       RESULTS[balloon_driver]="not_applicable"
       RESULTS[ksm_enabled]="not_applicable"
       return
     fi
     
-    print_color "36" "[4/6] KVM 功能: virtio_balloon 驱动"
+    # KVM Balloon Driver Check
     if lsmod | grep -q virtio_balloon; then
-        print_color "33" "指标: virtio_balloon 驱动已加载。"
-        print_color "33" "这使得主机能够动态回收内存，是超售的一种能力。"
+        print_color "33" "指标 (virtio_balloon): 驱动已加载。这使得主机能够动态回收内存，是超售的一种能力。"
         RESULTS[balloon_driver]="loaded"
     else
-        print_color "32" "正常: virtio_balloon 驱动未加载。"
+        print_color "32" "指标 (virtio_balloon): 驱动未加载。"
         RESULTS[balloon_driver]="not_loaded"
     fi
 
-    print_color "36" "[5/6] KVM 功能: 内核同页合并 (KSM)"
+    # KSM Check
     if [ -f /sys/kernel/mm/ksm/run ] && [ "$(cat /sys/kernel/mm/ksm/run)" -eq 1 ]; then
-        print_color "33" "指标: KSM 已启用。"
-        print_color "33" "此内存节省功能常用于高密度虚拟化环境。"
+        print_color "33" "指标 (KSM): 已启用。此内存节省功能常用于高密度虚拟化环境。"
         RESULTS[ksm_enabled]=true
     else
-        print_color "32" "正常: KSM 未启用。"
+        print_color "32" "指标 (KSM): 未启用。"
         RESULTS[ksm_enabled]=false
     fi
 }
 
 run_cpu_steal_test() {
-    print_color "36" "[6/6] CPU 窃取时间分析"
+    print_color "36" "[5/5] CPU 窃取时间分析"
     
     if ! command -v mpstat &>/dev/null; then
         print_color "31" "测试失败: 'mpstat' 是必需的但未安装。自动安装可能已失败。"
@@ -240,12 +238,23 @@ run_cpu_steal_test() {
 
     print_color "32" "方法: 'mpstat' 分析 (5秒平均值)。"
     local steal_avg
-    steal_avg=$(mpstat -P ALL 1 5 | grep "Average" | awk '{print $NF}')
+    # Robustly parse the %steal column (4th from last) from the final average line
+    steal_avg=$(mpstat -P ALL 1 5 | grep "^Average:" | tail -n 1 | awk '{print $(NF-3)}')
     
     RESULTS[cpu_steal_percent]=$steal_avg
     print_color "34" "结果: ${steal_avg}% 平均窃取时间。"
-    if (( $(echo "$steal_avg > $STEAL_WARN_PERCENT" | bc -l 2>/dev/null || echo "$steal_avg > $STEAL_WARN_PERCENT") )); then
-        print_color "31" "警告: CPU 窃取时间高于阈值 (${STEAL_WARN_PERCENT}%)。"
+    
+    # Robust comparison for float values, works with/without bc
+    if command -v bc &>/dev/null; then
+        if (( $(echo "$steal_avg > $STEAL_WARN_PERCENT" | bc -l) )); then
+            print_color "31" "警告: CPU 窃取时间高于阈值 (${STEAL_WARN_PERCENT}%)。"
+        fi
+    else
+        # Fallback to integer comparison if bc is not available
+        local steal_avg_int=${steal_avg%.*}
+        if [ "$steal_avg_int" -gt "$STEAL_WARN_PERCENT" ]; then
+            print_color "31" "警告: CPU 窃取时间高于阈值 (${STEAL_WARN_PERCENT}%)。"
+        fi
     fi
 }
 
@@ -260,10 +269,15 @@ main() {
     fi
 
     install_dependencies
+    print_color "0" "------------------------------------------------"
     check_virt_type
+    print_color "0" "------------------------------------------------"
     run_memory_test
+    print_color "0" "------------------------------------------------"
     run_disk_test
+    print_color "0" "------------------------------------------------"
     check_kvm_features
+    print_color "0" "------------------------------------------------"
     run_cpu_steal_test
 
     if [[ "$JSON_OUTPUT" == true ]]; then
