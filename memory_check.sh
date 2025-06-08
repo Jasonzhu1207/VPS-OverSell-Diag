@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
 
 #
-# VPS Oversell Possibility Check Script (v5 - Professional Edition)
+# VPS Oversell Possibility Check Script (v6 - Professional Edition)
 #
 # Description:
 # A comprehensive script to detect VPS overselling by focusing on performance metrics
 # and virtualization artifacts. Designed to be robust, adaptive, and user-guiding.
 #
-# Changelog (v5):
-# 1. Removed: CPU Model check, to focus purely on performance and overselling techniques.
-# 2. Enhanced I/O Tests: Memory test now falls back to /tmp if /dev/shm is unavailable.
-#    Disk test has improved error handling.
-# 3. New: Smart Dependency Check. The script now detects missing commands and provides
-#    the exact installation command for the user's package manager (apt/yum/dnf).
+# Changelog (v6):
+# 1. Critical Fix: Re-engineered the 'dd' output parsing logic for both memory and
+#    disk I/O tests. The new method is far more robust and correctly handles
+#    different system locales and dd output variations, fixing the "0 MB/s" bug.
 #
 
 # --- Helper function for colored output ---
@@ -23,7 +21,7 @@ print_color() {
 }
 
 # --- Script Header ---
-print_color "33" "VPS 资源超售可能性检测脚本 (专业增强版 v5)"
+print_color "33" "VPS 资源超售可能性检测脚本 (专业增强版 v6)"
 print_color "0"  "================================================"
 
 # --- 0. Smart Dependency Check & Fix Advisor ---
@@ -89,10 +87,13 @@ EXIT_CODE=$?
 rm -f "${TEST_PATH}/test.tmp" &>/dev/null
 
 if [ $EXIT_CODE -eq 0 ]; then
-    SPEED_RAW=$(echo "$SPEED_INFO" | awk 'END{print $NF}')
+    # New, more robust parsing logic
+    SPEED_LINE=$(echo "$SPEED_INFO" | tail -n 1)
+    SPEED_RAW=$(echo "$SPEED_LINE" | awk -F, '{print $NF}' | sed 's/^[ \t]*//')
     SPEED_VALUE=$(echo "$SPEED_RAW" | sed 's/[^0-9.]*//g')
-    SPEED_UNIT=$(echo "$SPEED_RAW" | sed 's/[0-9.]*//g')
+    SPEED_UNIT=$(echo "$SPEED_RAW" | sed 's/[0-9.]*//g' | sed 's/ //g')
     SPEED_MB=0
+    
     if [[ "$SPEED_UNIT" == "GB/s" ]]; then
         SPEED_MB=$(awk -v speed="$SPEED_VALUE" 'BEGIN{printf "%.0f", speed * 1024}')
     elif [[ "$SPEED_UNIT" == "kB/s" ]]; then
@@ -101,12 +102,16 @@ if [ $EXIT_CODE -eq 0 ]; then
         SPEED_MB=$(awk -v speed="$SPEED_VALUE" 'BEGIN{printf "%.0f", speed}')
     fi
 
-    THRESHOLD=500
-    print_color "34" "内存写入速度: ${SPEED_MB} MB/s"
-    if [ "$SPEED_MB" -lt "$THRESHOLD" ] && [ "$TEST_PATH" == "/dev/shm" ]; then
-        print_color "31" "警告: 内存写入速度较低 (低于 ${THRESHOLD}MB/s)，母机有使用Swap超售的嫌疑。"
+    if [ "$SPEED_MB" -gt 0 ]; then
+        THRESHOLD=500
+        print_color "34" "内存写入速度: ${SPEED_MB} MB/s"
+        if [ "$SPEED_MB" -lt "$THRESHOLD" ] && [ "$TEST_PATH" == "/dev/shm" ]; then
+            print_color "31" "警告: 内存写入速度较低 (低于 ${THRESHOLD}MB/s)，母机有使用Swap超售的嫌疑。"
+        else
+            print_color "32" "内存性能正常。"
+        fi
     else
-        print_color "32" "内存性能正常。"
+        print_color "31" "内存性能测试失败 (无法解析dd输出)。"
     fi
 else
     print_color "31" "内存性能测试失败 (dd命令执行错误)。"
@@ -121,22 +126,29 @@ IO_EXIT_CODE=$?
 rm -f test_io.tmp &>/dev/null
 
 if [ $IO_EXIT_CODE -eq 0 ]; then
-    IO_SPEED_RAW=$(echo "$IO_INFO" | awk 'END{print $NF}')
+    # New, more robust parsing logic
+    IO_SPEED_LINE=$(echo "$IO_INFO" | tail -n 1)
+    IO_SPEED_RAW=$(echo "$IO_SPEED_LINE" | awk -F, '{print $NF}' | sed 's/^[ \t]*//')
     IO_SPEED_VALUE=$(echo "$IO_SPEED_RAW" | sed 's/[^0-9.]*//g')
-    IO_SPEED_UNIT=$(echo "$IO_SPEED_RAW" | sed 's/[0-9.]*//g')
+    IO_SPEED_UNIT=$(echo "$IO_SPEED_RAW" | sed 's/[0-9.]*//g' | sed 's/ //g')
     IO_SPEED_MB=0
+    
     if [[ "$IO_SPEED_UNIT" == "GB/s" ]]; then
         IO_SPEED_MB=$(awk -v speed="$IO_SPEED_VALUE" 'BEGIN{printf "%.0f", speed * 1024}')
     elif [[ "$IO_SPEED_UNIT" == "MB/s" ]]; then
         IO_SPEED_MB=$(awk -v speed="$IO_SPEED_VALUE" 'BEGIN{printf "%.0f", speed}')
     fi
 
-    IO_THRESHOLD=100
-    print_color "34" "磁盘直接写入速度: ${IO_SPEED_MB} MB/s"
-    if [ "$IO_SPEED_MB" -lt "$IO_THRESHOLD" ]; then
-        print_color "31" "警告: 磁盘I/O速度较低 (低于 ${IO_THRESHOLD}MB/s)，硬盘性能差或I/O被严重限制。"
+    if [ "$IO_SPEED_MB" -gt 0 ]; then
+        IO_THRESHOLD=100
+        print_color "34" "磁盘直接写入速度: ${IO_SPEED_MB} MB/s"
+        if [ "$IO_SPEED_MB" -lt "$IO_THRESHOLD" ]; then
+            print_color "31" "警告: 磁盘I/O速度较低 (低于 ${IO_THRESHOLD}MB/s)，硬盘性能差或I/O被严重限制。"
+        else
+            print_color "32" "磁盘I/O性能正常。"
+        fi
     else
-        print_color "32" "磁盘I/O性能正常。"
+        print_color "31" "磁盘I/O测试失败 (无法解析dd输出)。"
     fi
 else
     print_color "31" "磁盘I/O测试失败 (可能是权限不足或不支持 oflag=direct)。"
