@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 
 #
-# VPS Oversell Possibility Check Script (Optimized Version)
+# VPS Oversell Possibility Check Script (v4 - Professional Edition)
 #
 # Description:
-# This script checks for common VPS overselling techniques by focusing on performance metrics
-# and specific virtualization artifacts, rather than user-configurable settings.
+# This script provides a comprehensive check for common VPS overselling techniques.
+# It's designed to be robust, adaptable, and provide deep insights.
 #
-# Changes based on feedback:
-# 1. Memory Check: Replaced simple SWAP check with a memory I/O benchmark to detect
-#    potential host-level swapping.
-# 2. Balloon Driver: Made the check more robust to handle minimal systems where stats
-#    files might be missing, focusing on the driver's presence as the primary indicator.
-# 3. CPU Check: Replaced CPU usage with CPU Steal Time, a much more accurate metric for
-#    CPU overselling.
+# Changelog (v4):
+# 1. New: Added CPU Model and Core count display to identify host hardware quality.
+# 2. New: Added Disk I/O performance benchmark to detect storage overselling.
+# 3. Enhanced: CPU Steal Time check is now adaptive. It uses 'bc' for precision
+#    if available, otherwise gracefully falls back to integer comparison.
+# 4. Refined: Re-ordered checks for a more logical diagnostic flow.
 #
 
 # --- Helper function for colored output ---
@@ -24,126 +23,157 @@ print_color() {
 }
 
 # --- Script Header ---
-print_color "33" "VPS 资源超售可能性检测脚本 (优化版)"
+print_color "33" "VPS 资源超售可能性检测脚本 (专业增强版 v4)"
 print_color "0"  "=============================================="
 
-# --- 1. Memory Performance Check (Replaces SWAP check) ---
-print_color "36" "[1/4] 内存性能检测 (判断母机Swap可能性)"
-print_color "33" "说明: 测试内存写入速度。速度过低(如<500MB/s)可能表示母机使用硬盘(Swap)超售内存。"
-
-# Perform a quick benchmark using dd on tmpfs (in-memory filesystem)
-# The output of dd can vary, so we capture stderr to get the speed info
-if ! SPEED_INFO=$(dd if=/dev/zero of=/dev/shm/test.tmp bs=1M count=256 2>&1); then
-    # Some systems might not have /dev/shm, try /tmp if it's tmpfs
-    if mount | grep -q 'on /tmp type tmpfs'; then
-        SPEED_INFO=$(dd if=/dev/zero of=/tmp/test.tmp bs=1M count=256 2>&1)
-        rm -f /tmp/test.tmp
-    else
-        print_color "31" "错误: 无法找到合适的内存文件系统 (如 /dev/shm) 进行测试。"
-        SPEED_INFO=""
+# --- 0. Dependency Check ---
+print_color "36" "[0/6] 依赖环境检查"
+COMMANDS_OK=true
+for cmd in dd vmstat awk lscpu; do
+    if ! command -v $cmd &> /dev/null; then
+        print_color "31" "警告: 命令 '$cmd' 未找到。部分检测功能可能受限。"
+        # Do not exit, just warn, to allow other checks to run
     fi
+done
+print_color "32" "依赖检查完成。"
+print_color "0" "----------------------------------------------"
+
+
+# --- 1. CPU Information ---
+print_color "36" "[1/6] CPU 信息检测"
+print_color "33" "说明: 可判断服务商是否使用老旧或低性能CPU。"
+if command -v lscpu &> /dev/null; then
+    CPU_MODEL=$(lscpu | grep "Model name:" | sed 's/Model name:[ \t]*//g')
+    CPU_CORES=$(lscpu | grep "^CPU(s):" | awk '{print $2}')
+    print_color "34" "CPU 型号: ${CPU_MODEL:-未知}"
+    print_color "34" "核心数量: ${CPU_CORES:-未知} Cores"
 else
-    rm -f /dev/shm/test.tmp # Clean up immediately
-fi
-
-if [ -n "$SPEED_INFO" ]; then
-    # Extract the speed value and unit from the last field of dd's output
-    SPEED_VALUE=$(echo "$SPEED_INFO" | awk -F, '{print $NF}' | sed 's/ //g' | sed 's/[a-zA-Z/]*//g')
-    SPEED_UNIT=$(echo "$SPEED_INFO" | awk -F, '{print $NF}' | sed 's/ //g' | grep -o '[a-zA-Z/]*')
-
-    # Normalize speed to MB/s for a consistent comparison
-    SPEED_MB=0
-    if [[ "$SPEED_UNIT" == "GB/s" ]]; then
-        SPEED_MB=$(awk -v speed="$SPEED_VALUE" 'BEGIN{printf "%.0f", speed * 1024}')
-    elif [[ "$SPEED_UNIT" == "kB/s" ]]; then
-        SPEED_MB=$(awk -v speed="$SPEED_VALUE" 'BEGIN{printf "%.0f", speed / 1024}')
-    elif [[ "$SPEED_UNIT" == "MB/s" ]]; then
-        SPEED_MB=$(awk -v speed="$SPEED_VALUE" 'BEGIN{printf "%.0f", speed}')
-    fi
-
-    THRESHOLD=500 # 500 MB/s is a reasonable minimum for RAM.
-    print_color "34" "检测到内存写入速度: ${SPEED_MB} MB/s"
-
-    if (( SPEED_MB < THRESHOLD )); then
-        print_color "31" "警告: 内存写入速度较低 (低于 ${THRESHOLD}MB/s)，母机有使用Swap超售的嫌疑。"
-    else
-        print_color "32" "内存性能正常，未见明显由母机Swap导致的性能问题。"
-    fi
-else
-    print_color "33" "跳过内存性能检测。"
+    print_color "31" "未找到 'lscpu' 命令，跳过此项检测。"
 fi
 print_color "0" "----------------------------------------------"
 
 
-# --- 2. Balloon Driver Check (Optimized) ---
-print_color "36" "[2/4] 气球驱动 (virtio_balloon) 超售检测"
+# --- 2. Memory Performance Check ---
+print_color "36" "[2/6] 内存性能检测 (判断母机Swap可能性)"
+print_color "33" "说明: 内存写入速度过低(如<500MB/s)可能表示母机性能不佳或使用硬盘(Swap)超售。"
+SPEED_INFO=$(LC_ALL=C dd if=/dev/zero of=/dev/shm/test.tmp bs=1M count=256 2>&1)
+rm -f /dev/shm/test.tmp &>/dev/null
+SPEED_RAW=$(echo "$SPEED_INFO" | awk 'END{print $NF}')
+SPEED_VALUE=$(echo "$SPEED_RAW" | sed 's/[^0-9.]*//g')
+SPEED_UNIT=$(echo "$SPEED_RAW" | sed 's/[0-9.]*//g')
+SPEED_MB=0
+if [[ "$SPEED_UNIT" == "GB/s" ]]; then
+    SPEED_MB=$(awk -v speed="$SPEED_VALUE" 'BEGIN{printf "%.0f", speed * 1024}')
+elif [[ "$SPEED_UNIT" == "kB/s" ]]; then
+    SPEED_MB=$(awk -v speed="$SPEED_VALUE" 'BEGIN{printf "%.0f", speed / 1024}')
+elif [[ "$SPEED_UNIT" == "MB/s" ]]; then
+    SPEED_MB=$(awk -v speed="$SPEED_VALUE" 'BEGIN{printf "%.0f", speed}')
+fi
+
+if [ "$SPEED_MB" -gt 0 ]; then
+    THRESHOLD=500
+    print_color "34" "内存写入速度: ${SPEED_MB} MB/s"
+    if [ "$SPEED_MB" -lt "$THRESHOLD" ]; then
+        print_color "31" "警告: 内存写入速度较低 (低于 ${THRESHOLD}MB/s)，母机有使用Swap超售的嫌疑。"
+    else
+        print_color "32" "内存性能正常。"
+    fi
+else
+    print_color "31" "内存性能测试失败，可能是 /dev/shm 不可用。"
+fi
+print_color "0" "----------------------------------------------"
+
+
+# --- 3. Disk I/O Performance Check ---
+print_color "36" "[3/6] 磁盘 I/O 性能检测"
+print_color "33" "说明: 测试磁盘直接写入速度，判断IO是否被严重限制。"
+IO_INFO=$(LC_ALL=C dd if=/dev/zero of=test_io.tmp bs=64k count=16k oflag=direct 2>&1)
+rm -f test_io.tmp
+IO_SPEED_RAW=$(echo "$IO_INFO" | awk 'END{print $NF}')
+IO_SPEED_VALUE=$(echo "$IO_SPEED_RAW" | sed 's/[^0-9.]*//g')
+IO_SPEED_UNIT=$(echo "$IO_SPEED_RAW" | sed 's/[0-9.]*//g')
+IO_SPEED_MB=0
+if [[ "$IO_SPEED_UNIT" == "GB/s" ]]; then
+    IO_SPEED_MB=$(awk -v speed="$IO_SPEED_VALUE" 'BEGIN{printf "%.0f", speed * 1024}')
+elif [[ "$IO_SPEED_UNIT" == "MB/s" ]]; then
+    IO_SPEED_MB=$(awk -v speed="$IO_SPEED_VALUE" 'BEGIN{printf "%.0f", speed}')
+fi
+
+if [ "$IO_SPEED_MB" -gt 0 ]; then
+    IO_THRESHOLD=100
+    print_color "34" "磁盘直接写入速度: ${IO_SPEED_MB} MB/s"
+    if [ "$IO_SPEED_MB" -lt "$IO_THRESHOLD" ]; then
+        print_color "31" "警告: 磁盘I/O速度较低 (低于 ${IO_THRESHOLD}MB/s)，硬盘性能差或I/O被严重限制。"
+    else
+        print_color "32" "磁盘I/O性能正常。"
+    fi
+else
+    print_color "31" "磁盘I/O测试失败。"
+fi
+print_color "0" "----------------------------------------------"
+
+
+# --- 4. Balloon Driver Check ---
+print_color "36" "[4/6] 气球驱动 (virtio_balloon) 检测"
 if lsmod | grep -q virtio_balloon; then
     print_color "31" "检测到 virtio_balloon 驱动已加载。"
     print_color "33" "说明: 这表明母机具备动态回收您VPS内存的能力，是内存超售的技术标志。"
-    
-    # Check if specific stats files exist (can be missing on minimal systems)
-    if [ -f /sys/class/balloon/balloon0/current_memory ] && [ -f /sys/class/balloon/balloon0/target_memory ]; then
-        current_kb=$(cat /sys/class/balloon/balloon0/current_memory)
-        target_kb=$(cat /sys/class/balloon/balloon0/target_memory)
-        current_mb=$((current_kb / 1024))
-        target_mb=$((target_kb / 1024))
-        
-        print_color "34" "气球当前内存: ${current_mb} MB"
-        print_color "34" "气球目标内存: ${target_mb} MB"
-        
-        if [ "$current_kb" -ne "$target_kb" ]; then
-            print_color "31" "警告: 当前内存与目标内存不一致，内存正在或曾经被动态调整！"
+    if [ -f /sys/class/balloon/balloon0/current_memory ]; then
+        current_mb=$(( $(cat /sys/class/balloon/balloon0/current_memory) / 1024 ))
+        target_mb=$(( $(cat /sys/class/balloon/balloon0/target_memory) / 1024 ))
+        print_color "34" "气球当前内存: ${current_mb} MB | 目标内存: ${target_mb} MB"
+        if [ "$current_mb" -ne "$target_mb" ]; then
+            print_color "31" "警告: 当前内存与目标不一致，内存正在或曾经被动态调整！"
         else
-            print_color "32" "当前内存与目标内存一致。注意：即使一致，驱动存在即代表有超售能力。"
+            print_color "32" "内存暂未被回收。注意：驱动存在即代表有超售能力。"
         fi
     else
-        print_color "33" "注意: 无法读取具体的气球内存使用情况 (可能是精简系统)。"
-        print_color "33" "但驱动已加载是明确信号，表示服务商有能力随时回收您的内存。"
+        print_color "33" "注意: 无法读取具体气球内存用量(内核可能被定制)，但驱动存在是明确风险信号。"
     fi
 else
-    print_color "32" "未发现 virtio_balloon 驱动，未使用此技术超售。"
+    print_color "32" "未发现 virtio_balloon 驱动。"
 fi
 print_color "0" "----------------------------------------------"
 
 
-# --- 3. KSM (Kernel Samepage Merging) Check ---
-print_color "36" "[3/4] KSM (内存合并) 超售检测"
+# --- 5. KSM (Kernel Samepage Merging) Check ---
+print_color "36" "[5/6] KSM (内存合并) 检测"
 if [ -f /sys/kernel/mm/ksm/run ] && [ "$(cat /sys/kernel/mm/ksm/run)" -eq 1 ]; then
-    print_color "31" "检测到 KSM (Kernel Samepage Merging) 已启用。"
-    print_color "33" "说明: KSM会合并内存中相同的页面，以此在母机上节省内存，是内存超售的一种技术。"
-    
+    print_color "31" "检测到 KSM 已启用。"
+    print_color "33" "说明: KSM是典型的内存超售技术。"
     pages_sharing=$(cat /sys/kernel/mm/ksm/pages_sharing)
-    saved_mem=$((pages_sharing * 4 / 1024)) # Assuming 4KB page size
-    
+    saved_mem=$((pages_sharing * 4 / 1024))
     print_color "34" "当前共享页面数: ${pages_sharing} (约节省 ${saved_mem} MB 内存)"
 else
-    print_color "32" "KSM 未启用，未使用此技术超售。"
+    print_color "32" "KSM 未启用。"
 fi
 print_color "0" "----------------------------------------------"
 
 
-# --- 4. CPU Steal Time Check (Replaces CPU Usage) ---
-print_color "36" "[4/4] CPU Steal Time (CPU窃取时间) 检测"
-print_color "33" "说明: 该值表示CPU资源被母机上其他VPS“偷走”的百分比。持续高于5%是CPU超售的强力信号。"
+# --- 6. CPU Steal Time Check ---
+print_color "36" "[6/6] CPU Steal Time (窃取时间) 检测"
+print_color "33" "说明: CPU资源被母机上其他VPS“偷走”的百分比，持续高于5%是CPU超售的强力信号。"
+STEAL_TIME=$(vmstat 1 2 | tail -1 | awk '{print $16}')
+print_color "34" "当前 CPU Steal Time: ${STEAL_TIME}%"
 
-# Using vmstat for more consistent output across systems than top
-# The 'st' column is the 16th on most systems.
-if ! command -v vmstat &> /dev/null; then
-    print_color "31" "错误: 未找到 'vmstat' 命令，无法检测CPU Steal Time。"
-else
-    STEAL_TIME=$(vmstat 1 2 | tail -1 | awk '{print $16}')
-    print_color "34" "当前 CPU Steal Time: ${STEAL_TIME}%"
-    
-    if (( $(echo "$STEAL_TIME > 5" | bc -l) )); then
-        print_color "31" "警告: CPU Steal Time 偏高！这强烈表明CPU资源被严重超售。"
+if command -v bc &> /dev/null; then
+    if (( $(echo "$STEAL_TIME > 5.0" | bc -l) )); then
+        print_color "31" "警告: CPU Steal Time 偏高！强烈表明CPU资源被严重超售。"
     else
         print_color "32" "CPU Steal Time 处于正常范围。"
     fi
+else
+    STEAL_TIME_INT=${STEAL_TIME%.*}
+    if [ "$STEAL_TIME_INT" -gt 5 ]; then
+        print_color "31" "警告: CPU Steal Time 偏高！强烈表明CPU资源被严重超售。"
+    else
+        print_color "32" "CPU Steal Time 处于正常范围。"
+    fi
+    print_color "33" "(提示: 未安装 'bc'，已执行整数比较)"
 fi
 print_color "0" "----------------------------------------------"
 
-
 # --- End of Script ---
 print_color "33" "检测结束。"
-print_color "35" "总结: 请综合以上四项指标进行判断。任何一项出现红色警告都值得警惕。"
+print_color "35" "总结: 请综合CPU型号、内存/磁盘性能、以及虚拟化技术指标(Balloon, KSM, Steal Time)进行判断。"
 
