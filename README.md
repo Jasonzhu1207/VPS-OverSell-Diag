@@ -1,4 +1,4 @@
-# VPS 超售检测工具
+# VPS 超售检测工具（VPS-OverSell-Diagnostics）
 
 一个轻量级、智能化的VPS性能诊断脚本，旨在提供专业、客观的性能评估与超售指标分析。
 
